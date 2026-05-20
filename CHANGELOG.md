@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 — 2026-05-20
+
+### Fixed
+- **Works in Fully Kiosk Browser and other restricted WebViews now.** Previously the card imported Lit from `cdn.jsdelivr.net`, which Fully Kiosk's WebView blocks or fails to load on many devices, leading to a "Custom element doesn't exist" error even after refresh/restart. The card now has Lit inlined directly — fully self-contained, no external runtime dependencies. The single JS file (~57 KB) is fetched once from your HA host and that's it.
+
+### Changed
+- Inlined Lit 3 (~17 KB minified) is targeted at ES2019 (Chrome 71+, Android WebView 71+), broadening compatibility with older Fire tablets and kiosk devices.
+
 ## 1.4.2 — 2026-05-20
 
 ### Changed
