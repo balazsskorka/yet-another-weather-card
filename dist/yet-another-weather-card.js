@@ -5,7 +5,7 @@
  * toggleable hourly/daily forecast, and support for custom temperature,
  * humidity, and pressure sensor entities.
  *
- * Version: 1.1.0
+ * Version: 1.3.0
  * Author:  Balazs Skorka
  *
  * Installation (manual, easiest):
@@ -180,7 +180,7 @@ class YetAnotherWeatherCard extends LitElement {
 
   _formatTime(dt) {
     return new Date(dt).toLocaleTimeString(
-      this._hass.locale?.language || "en",
+      this._lang() || this._hass.locale?.language || "en",
       { hour: "2-digit", minute: "2-digit", hour12: false }
     );
   }
@@ -188,15 +188,131 @@ class YetAnotherWeatherCard extends LitElement {
   _formatDay(dt) {
     const d = new Date(dt);
     const today = new Date();
-    if (d.toDateString() === today.toDateString()) return "Today";
-    return d.toLocaleDateString(this._hass.locale?.language || "en", {
-      weekday: "short",
-    });
+    if (d.toDateString() === today.toDateString()) return this._t("today");
+    return d.toLocaleDateString(
+      this._lang() || this._hass.locale?.language || "en",
+      { weekday: "short" }
+    );
+  }
+
+  // ── Translations ─────────────────────────────────────────
+  //
+  // Strings used by the card, translated for en/de/hu. The keys for weather
+  // conditions match Home Assistant's canonical condition strings:
+  // https://www.home-assistant.io/integrations/weather/#condition-mapping
+  //
+  // _lang() resolves the active language: explicit config option wins, then
+  // the user's HA UI locale, then English as the ultimate fallback.
+  static get translations() {
+    return {
+      en: {
+        // Conditions
+        "clear-night": "Clear night",
+        cloudy: "Cloudy",
+        exceptional: "Exceptional",
+        fog: "Fog",
+        hail: "Hail",
+        lightning: "Lightning",
+        "lightning-rainy": "Lightning, rainy",
+        partlycloudy: "Partly cloudy",
+        pouring: "Pouring",
+        rainy: "Rainy",
+        snowy: "Snowy",
+        "snowy-rainy": "Snowy, rainy",
+        sunny: "Sunny",
+        windy: "Windy",
+        "windy-variant": "Windy",
+        // UI labels
+        hourly: "Hourly",
+        daily: "Daily",
+        now: "Now",
+        today: "Today",
+        humidity: "Humidity",
+        pressure: "Pressure",
+        wind: "Wind",
+        not_found: "Weather entity not found",
+      },
+      de: {
+        "clear-night": "Klare Nacht",
+        cloudy: "Bewölkt",
+        exceptional: "Außergewöhnlich",
+        fog: "Nebel",
+        hail: "Hagel",
+        lightning: "Gewitter",
+        "lightning-rainy": "Gewitter, Regen",
+        partlycloudy: "Teilweise bewölkt",
+        pouring: "Starkregen",
+        rainy: "Regnerisch",
+        snowy: "Schneefall",
+        "snowy-rainy": "Schneeregen",
+        sunny: "Sonnig",
+        windy: "Windig",
+        "windy-variant": "Windig",
+        hourly: "Stündlich",
+        daily: "Täglich",
+        now: "Jetzt",
+        today: "Heute",
+        humidity: "Luftfeuchte",
+        pressure: "Luftdruck",
+        wind: "Wind",
+        not_found: "Wetter-Entität nicht gefunden",
+      },
+      hu: {
+        "clear-night": "Tiszta éjszaka",
+        cloudy: "Felhős",
+        exceptional: "Rendkívüli",
+        fog: "Köd",
+        hail: "Jégeső",
+        lightning: "Villámlás",
+        "lightning-rainy": "Villámlás, eső",
+        partlycloudy: "Részben felhős",
+        pouring: "Zuhogó eső",
+        rainy: "Esős",
+        snowy: "Havazás",
+        "snowy-rainy": "Havas eső",
+        sunny: "Napos",
+        windy: "Szeles",
+        "windy-variant": "Szeles",
+        hourly: "Óránként",
+        daily: "Naponta",
+        now: "Most",
+        today: "Ma",
+        humidity: "Páratartalom",
+        pressure: "Légnyomás",
+        wind: "Szél",
+        not_found: "Időjárás entitás nem található",
+      },
+    };
+  }
+
+  _lang() {
+    const supported = ["en", "de", "hu"];
+    // Explicit config option wins
+    if (this._config?.language && supported.includes(this._config.language)) {
+      return this._config.language;
+    }
+    // Then HA's UI language. hass.locale.language is like "en", "de-CH", "hu".
+    const ha = this._hass?.locale?.language || this._hass?.language || "";
+    const base = ha.toLowerCase().split("-")[0];
+    if (supported.includes(base)) return base;
+    return "en";
+  }
+
+  _t(key) {
+    const lang = this._lang();
+    const t = YetAnotherWeatherCard.translations;
+    return t[lang]?.[key] || t.en[key] || key;
   }
 
   _prettyCondition(c) {
     if (!c) return "";
-    return c.replace(/[-_]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+    const translated = this._t(c);
+    // If the key isn't in any translation table, _t returns the key itself —
+    // fall back to a sentence-cased version of the raw condition.
+    if (translated === c) {
+      return c.replace(/[-_]/g, " ").replace(/^./, (ch) => ch.toUpperCase());
+    }
+    return translated;
   }
 
   // ── Animated icon factory ────────────────────────────────
@@ -364,7 +480,7 @@ class YetAnotherWeatherCard extends LitElement {
                     </div>
                     <div class="cond">${this._prettyCondition(condition)}</div>
                   </div>
-                  <div class="icon-wrap">${this._icon(condition, 88, this._isDay())}</div>
+                  <div class="icon-wrap">${this._icon(condition, 132, this._isDay())}</div>
                 </div>`
             : ""}
 
@@ -373,19 +489,19 @@ class YetAnotherWeatherCard extends LitElement {
                 <div class="stats">
                   ${humidityData
                     ? html`<div class="stat">
-                        <div class="stat-label">Humidity</div>
+                        <div class="stat-label">${this._t("humidity")}</div>
                         <div class="stat-val">${this._fmt(humidityData.value, 0)}${humidityData.unit || "%"}</div>
                       </div>`
                     : ""}
                   ${pressureData
                     ? html`<div class="stat">
-                        <div class="stat-label">Pressure</div>
+                        <div class="stat-label">${this._t("pressure")}</div>
                         <div class="stat-val">${this._fmt(pressureData.value, 0)} ${pressureData.unit || "hPa"}</div>
                       </div>`
                     : ""}
                   ${w.attributes.wind_speed != null
                     ? html`<div class="stat">
-                        <div class="stat-label">Wind</div>
+                        <div class="stat-label">${this._t("wind")}</div>
                         <div class="stat-val">${this._fmt(w.attributes.wind_speed, 0)} ${w.attributes.wind_speed_unit || "km/h"}</div>
                       </div>`
                     : ""}
@@ -399,11 +515,11 @@ class YetAnotherWeatherCard extends LitElement {
                       <div class="toggle">
                         <div class="tab ${this._mode === "hourly" ? "active" : ""}"
                              @click=${() => { this._mode = "hourly"; this.requestUpdate(); }}>
-                          Hourly
+                          ${this._t("hourly")}
                         </div>
                         <div class="tab ${this._mode === "daily" ? "active" : ""}"
                              @click=${() => { this._mode = "daily"; this.requestUpdate(); }}>
-                          Daily
+                          ${this._t("daily")}
                         </div>
                       </div>`
                   : ""}
@@ -412,10 +528,10 @@ class YetAnotherWeatherCard extends LitElement {
                     <div class="fc-item">
                       <div class="fc-label">
                         ${this._mode === "hourly"
-                          ? i === 0 ? "Now" : this._formatTime(f.datetime)
+                          ? i === 0 ? this._t("now") : this._formatTime(f.datetime)
                           : this._formatDay(f.datetime)}
                       </div>
-                      <div class="fc-icon">${this._icon(f.condition, 36, this._isDay(f.datetime))}</div>
+                      <div class="fc-icon">${this._icon(f.condition, 54, this._isDay(f.datetime))}</div>
                       <div class="fc-hi">${this._fmt(f.temperature, 0)}°</div>
                       ${this._mode === "daily" && f.templow != null
                         ? html`<div class="fc-lo">${this._fmt(f.templow, 0)}°</div>`
@@ -634,6 +750,20 @@ class YetAnotherWeatherCardEditor extends LitElement {
               number: { min: 1, max: 24, step: 1, mode: "box" },
             },
           },
+          {
+            name: "language",
+            selector: {
+              select: {
+                mode: "dropdown",
+                options: [
+                  { value: "", label: "Auto (Home Assistant)" },
+                  { value: "en", label: "English" },
+                  { value: "de", label: "Deutsch" },
+                  { value: "hu", label: "Magyar" },
+                ],
+              },
+            },
+          },
         ],
       },
       {
@@ -673,6 +803,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       name: "Display name",
       default_mode: "Default forecast view",
       forecast_items: "Forecast items",
+      language: "Language",
       temperature_entity: "Temperature sensor (optional)",
       humidity_entity: "Humidity sensor (optional)",
       pressure_entity: "Pressure sensor (optional)",
@@ -689,6 +820,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       humidity_entity: "Overrides the weather entity's humidity",
       pressure_entity: "Overrides the weather entity's pressure",
       forecast_items: "Number of forecast cells (1–24)",
+      language: "Leave Auto to follow your Home Assistant language",
     };
     return helpers[schema.name];
   };
@@ -703,6 +835,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       "temperature_entity",
       "humidity_entity",
       "pressure_entity",
+      "language",
     ]) {
       if (newConfig[key] === "" || newConfig[key] == null) {
         delete newConfig[key];
@@ -771,7 +904,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c YET-ANOTHER-WEATHER-CARD %c v1.1.0 ",
+  "%c YET-ANOTHER-WEATHER-CARD %c v1.3.0 ",
   "color: white; background: #185FA5; font-weight: 700; padding: 2px 6px; border-radius: 3px 0 0 3px;",
   "color: #185FA5; background: white; font-weight: 700; padding: 2px 6px; border: 1px solid #185FA5; border-radius: 0 3px 3px 0;"
 );

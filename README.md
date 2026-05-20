@@ -56,6 +56,7 @@ entity: weather.your_weather_entity
 | `pressure_entity` | string | — | Custom sensor for pressure |
 | `default_mode` | `hourly` \| `daily` | `hourly` | Which forecast tab is active initially |
 | `forecast_items` | number | `7` | Number of forecast cells to show |
+| `language` | `en` \| `de` \| `hu` | Home Assistant locale | UI language for condition names and labels |
 | `show_current` | boolean | `true` | Show top block (temp + icon + condition) |
 | `show_stats` | boolean | `true` | Show humidity / pressure / wind row |
 | `show_forecast` | boolean | `true` | Show forecast strip |
