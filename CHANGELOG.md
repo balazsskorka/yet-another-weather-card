@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.2 — 2026-05-20
+
+### Changed
+- Graph labels actually visible now. The root cause was that SVG text scales with the viewBox, so the previous "13 px" font-size was being rendered at ~9-10 px once the SVG was scaled to fit the card. Fixed by (a) shrinking the viewBox width (600 → 400) so it more closely matches the rendered card width, and (b) bumping the SVG font-sizes to 16/14/13 so they actually read at strip-equivalent sizes. Graph height grew to 150 to make room.
+- Data point circles slightly larger (r=3 → r=3.5) to remain visually balanced with the bigger labels.
+
 ## 1.4.1 — 2026-05-20
 
 ### Changed

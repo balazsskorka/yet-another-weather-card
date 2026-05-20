@@ -5,7 +5,7 @@
  * toggleable hourly/daily forecast, and support for custom temperature,
  * humidity, and pressure sensor entities.
  *
- * Version: 1.4.1
+ * Version: 1.4.2
  * Author:  Balazs Skorka
  *
  * Installation (manual, easiest):
@@ -444,11 +444,16 @@ class YetAnotherWeatherCard extends LitElement {
   _renderGraph(items) {
     if (!items || items.length < 2) return "";
 
-    const W = 600;          // SVG viewBox width — actual width is CSS-driven
-    const H = 130;          // total height including label space
-    const padX = 24;        // left/right padding
-    const padTop = 26;      // headroom for hi labels
-    const padBot = 38;      // space for time labels + lo labels
+    // viewBox dimensions. Because the SVG renders at width:100% of the card
+    // (~430-460px typical) but the viewBox is what defines the internal
+    // coordinate space, picking a viewBox width close to the actual rendered
+    // width keeps font-size units displaying at roughly true pixel size.
+    // With W=400, fonts will display at ~95-115% of their nominal size.
+    const W = 400;
+    const H = 150;          // total height including label space
+    const padX = 16;        // left/right padding
+    const padTop = 32;      // headroom for hi labels
+    const padBot = 48;      // space for time labels + lo labels
     const plotW = W - 2 * padX;
     const plotH = H - padTop - padBot;
 
@@ -559,7 +564,7 @@ class YetAnotherWeatherCard extends LitElement {
             : ""}
           ${hiPts.map(
             (p, i) => svg`
-              <circle cx="${p[0]}" cy="${p[1]}" r="3"
+              <circle cx="${p[0]}" cy="${p[1]}" r="3.5"
                       fill="var(--card-background-color, var(--ha-card-background, #fff))"
                       stroke="${accent}" stroke-width="2"/>`
           )}
@@ -567,16 +572,16 @@ class YetAnotherWeatherCard extends LitElement {
             i % labelEvery === 0
               ? svg`<text x="${xOf(i)}" y="${yOf(v) - 10}"
                           text-anchor="middle"
-                          font-size="13" font-weight="500"
+                          font-size="16" font-weight="500"
                           fill="var(--primary-text-color)">${this._fmt(v, 0)}°</text>`
               : ""
           )}
           ${hasLows
             ? lows.map((v, i) =>
                 v != null && i % labelEvery === 0
-                  ? svg`<text x="${xOf(i)}" y="${yOf(v) + 16}"
+                  ? svg`<text x="${xOf(i)}" y="${yOf(v) + 18}"
                               text-anchor="middle"
-                              font-size="11"
+                              font-size="14"
                               fill="var(--secondary-text-color)">${this._fmt(v, 0)}°</text>`
                   : ""
               )
@@ -585,7 +590,7 @@ class YetAnotherWeatherCard extends LitElement {
             i % labelEvery === 0
               ? svg`<text x="${xOf(i)}" y="${H - 8}"
                           text-anchor="middle"
-                          font-size="11"
+                          font-size="13"
                           fill="var(--secondary-text-color)">${
                             this._mode === "hourly"
                               ? i === 0 ? this._t("now") : this._formatTime(f.datetime)
@@ -1109,7 +1114,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c YET-ANOTHER-WEATHER-CARD %c v1.4.1 ",
+  "%c YET-ANOTHER-WEATHER-CARD %c v1.4.2 ",
   "color: white; background: #185FA5; font-weight: 700; padding: 2px 6px; border-radius: 3px 0 0 3px;",
   "color: #185FA5; background: white; font-weight: 700; padding: 2px 6px; border: 1px solid #185FA5; border-radius: 0 3px 3px 0;"
 );
