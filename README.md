@@ -27,7 +27,7 @@ Yes, the world needed another one. A custom weather card for Home Assistant with
 1. In Home Assistant, open **HACS**
 2. Click the three-dots menu in the top right → **Custom repositories**
 3. Add:
-   - **Repository**: `https://github.com/YOUR_GITHUB_USERNAME/yet-another-weather-card`
+   - **Repository**: `https://github.com/balazsskorka/yet-another-weather-card`
    - **Type**: `Dashboard`
 4. Click **Add**
 
