@@ -99,10 +99,10 @@ class YetAnotherWeatherCard extends LitElement {
     if (!config) throw new Error("Invalid configuration");
     const hasLocation =
       config.location_entity ||
-      (config.latitude_entity && config.longitude_entity);
+      (config.latitude != null && config.longitude != null);
     if (!config.entity && !hasLocation) {
       throw new Error(
-        "You need to define a weather entity or location entities (location_entity, or latitude_entity + longitude_entity)"
+        "You need to define a weather entity or a location (location_entity, or latitude + longitude)"
       );
     }
     if (config.entity && !config.entity.startsWith("weather.")) {
@@ -115,6 +115,7 @@ class YetAnotherWeatherCard extends LitElement {
       show_stats: true,
       forecast_items: 7,
       forecast_style: "strip",
+      disable_animations: false,
       ...config,
     };
     this._mode = this._config.default_mode;
@@ -142,6 +143,14 @@ class YetAnotherWeatherCard extends LitElement {
 
   get hass() {
     return this._hass;
+  }
+
+  updated() {
+    if (this._config?.disable_animations) {
+      this.setAttribute("disable-animations", "");
+    } else {
+      this.removeAttribute("disable-animations");
+    }
   }
 
   disconnectedCallback() {
@@ -207,7 +216,7 @@ class YetAnotherWeatherCard extends LitElement {
   _locationMode() {
     return !!(
       this._config?.location_entity ||
-      (this._config?.latitude_entity && this._config?.longitude_entity)
+      (this._config?.latitude != null && this._config?.longitude != null)
     );
   }
 
@@ -220,16 +229,10 @@ class YetAnotherWeatherCard extends LitElement {
         return { lat: s.attributes.latitude, lon: s.attributes.longitude };
       }
     }
-    const latE = this._config.latitude_entity;
-    const lonE = this._config.longitude_entity;
-    if (latE && lonE) {
-      const latS = this._hass.states[latE];
-      const lonS = this._hass.states[lonE];
-      if (latS && lonS) {
-        const lat = parseFloat(latS.state);
-        const lon = parseFloat(lonS.state);
-        if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
-      }
+    if (this._config.latitude != null && this._config.longitude != null) {
+      const lat = parseFloat(this._config.latitude);
+      const lon = parseFloat(this._config.longitude);
+      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
     }
     return null;
   }
@@ -1076,6 +1079,15 @@ class YetAnotherWeatherCard extends LitElement {
         .sun-rays, .cloud, .cloud2, .raindrop, .snowflake,
         .bolt, .wind, .fog, .hailstone { animation: none; }
       }
+      :host([disable-animations]) .sun-rays,
+      :host([disable-animations]) .cloud,
+      :host([disable-animations]) .cloud2,
+      :host([disable-animations]) .raindrop,
+      :host([disable-animations]) .snowflake,
+      :host([disable-animations]) .bolt,
+      :host([disable-animations]) .wind,
+      :host([disable-animations]) .fog,
+      :host([disable-animations]) .hailstone { animation: none; }
     `;
   }
 
@@ -1140,16 +1152,12 @@ class YetAnotherWeatherCardEditor extends LitElement {
         name: "",
         schema: [
           {
-            name: "latitude_entity",
-            selector: {
-              entity: { domain: ["input_number", "number", "sensor"] },
-            },
+            name: "latitude",
+            selector: { number: { min: -90, max: 90, step: 0.0001, mode: "box" } },
           },
           {
-            name: "longitude_entity",
-            selector: {
-              entity: { domain: ["input_number", "number", "sensor"] },
-            },
+            name: "longitude",
+            selector: { number: { min: -180, max: 180, step: 0.0001, mode: "box" } },
           },
         ],
       },
@@ -1233,6 +1241,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
           { name: "show_current", selector: { boolean: {} } },
           { name: "show_stats", selector: { boolean: {} } },
           { name: "show_forecast", selector: { boolean: {} } },
+          { name: "disable_animations", selector: { boolean: {} } },
         ],
       },
     ];
@@ -1243,8 +1252,8 @@ class YetAnotherWeatherCardEditor extends LitElement {
     const labels = {
       entity: "Weather entity",
       location_entity: "Location entity (device tracker / person)",
-      latitude_entity: "Latitude entity",
-      longitude_entity: "Longitude entity",
+      latitude: "Latitude",
+      longitude: "Longitude",
       name: "Display name",
       default_mode: "Default forecast view",
       forecast_items: "Forecast items",
@@ -1256,6 +1265,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       show_current: "Show current",
       show_stats: "Show stats",
       show_forecast: "Show forecast",
+      disable_animations: "Disable animations",
     };
     return labels[schema.name] ?? schema.name;
   };
@@ -1264,8 +1274,9 @@ class YetAnotherWeatherCardEditor extends LitElement {
     const helpers = {
       entity: "Required unless location entities are configured. Weather data source for entity mode.",
       location_entity: "Uses this entity's latitude/longitude to fetch weather from Open-Meteo. Replaces the weather entity as data source.",
-      latitude_entity: "Entity whose state is a latitude value (used together with longitude_entity)",
-      longitude_entity: "Entity whose state is a longitude value (used together with latitude_entity)",
+      latitude: "Fixed latitude coordinate (used together with longitude)",
+      longitude: "Fixed longitude coordinate (used together with latitude)",
+      disable_animations: "Show icons without motion (respects prefers-reduced-motion too)",
       temperature_entity: "Overrides the weather entity's temperature",
       humidity_entity: "Overrides the weather entity's humidity",
       pressure_entity: "Overrides the weather entity's pressure",
@@ -1288,8 +1299,8 @@ class YetAnotherWeatherCardEditor extends LitElement {
       "pressure_entity",
       "language",
       "location_entity",
-      "latitude_entity",
-      "longitude_entity",
+      "latitude",
+      "longitude",
     ]) {
       if (newConfig[key] === "" || newConfig[key] == null) {
         delete newConfig[key];
@@ -1316,6 +1327,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       show_current: true,
       show_stats: true,
       show_forecast: true,
+      disable_animations: false,
       ...this._config,
     };
 
