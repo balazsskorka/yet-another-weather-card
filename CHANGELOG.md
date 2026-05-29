@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.0 — 2026-05-29
+
+### Added
+- **Location-based weather** — new alternative to specifying a `weather.*` entity. When no `entity` is set, the card fetches current conditions and forecast from [Open-Meteo](https://open-meteo.com/) (free, no API key) using GPS coordinates. Two ways to provide the location:
+  - `location_entity` — a `device_tracker.*` or `person.*` entity; the card reads its `latitude` / `longitude` attributes and re-fetches whenever they change (e.g. a moving phone).
+  - `latitude` + `longitude` — fixed numeric coordinates entered directly in the visual editor or YAML.
+- **`disable_animations`** — new boolean option that freezes all icon CSS animations while keeping the full animated SVG icons visible. Useful for low-power displays or personal preference. Mirrors the existing `prefers-reduced-motion` behaviour.
+- **French language (`fr`)** — full translation for all condition names and UI labels.
+
+### Changed
+- `entity` is now optional when location options are configured.
+- Temperature unit in location mode follows the Home Assistant unit system (°C / °F).
+- `temperature_entity`, `humidity_entity`, `pressure_entity` still work as sensor overrides on top of Open-Meteo data in location mode.
+- Hourly graph in location mode now shows a filled temperature band (current-hour temp → day's forecasted low), matching the entity-mode graph behaviour.
+
+### Fixed
+- Concurrent Open-Meteo fetch requests (triggered by rapid HA state updates after a config save) are now serialised with an `_omFetching` guard, preventing current conditions and forecast from being drawn from different responses.
+- All three Open-Meteo payloads (`_omCurrent`, `_omHourly`, `_omDaily`) are built in local variables before any reactive assignment, so Lit always renders them in the same cycle — no partial-update flicker.
+- Saving new coordinates now immediately resets and re-fetches instead of waiting for the 10-minute stale threshold.
+
+---
+
 ## 1.5.0 — 2026-05-20
 
 ### Fixed
