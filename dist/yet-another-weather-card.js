@@ -73,6 +73,9 @@ class YetAnotherWeatherCard extends LitElement {
       _forecastHourly: { type: Array },
       _forecastDaily: { type: Array },
       _mode: { type: String },
+      _omCurrent: { type: Object },
+      _omHourly: { type: Array },
+      _omDaily: { type: Array },
     };
   }
 
@@ -84,13 +87,26 @@ class YetAnotherWeatherCard extends LitElement {
     this._unsubHourly = null;
     this._unsubDaily = null;
     this._subscribed = false;
+    this._omCurrent = null;
+    this._omHourly = [];
+    this._omDaily = [];
+    this._omLastLat = null;
+    this._omLastLon = null;
+    this._omLastFetch = 0;
+    this._omFetching = false;
   }
 
   setConfig(config) {
-    if (!config || !config.entity) {
-      throw new Error("You need to define a weather entity");
+    if (!config) throw new Error("Invalid configuration");
+    const hasLocation =
+      config.location_entity ||
+      (config.latitude != null && config.longitude != null);
+    if (!config.entity && !hasLocation) {
+      throw new Error(
+        "You need to define a weather entity or a location (location_entity, or latitude + longitude)"
+      );
     }
-    if (!config.entity.startsWith("weather.")) {
+    if (config.entity && !config.entity.startsWith("weather.")) {
       throw new Error("entity must be a weather.* entity");
     }
     this._config = {
@@ -100,22 +116,59 @@ class YetAnotherWeatherCard extends LitElement {
       show_stats: true,
       forecast_items: 7,
       forecast_style: "strip",
+      disable_animations: false,
       ...config,
     };
     this._mode = this._config.default_mode;
+
+    // Full reset so saving new coordinates always produces a visible
+    // reload of both the current conditions AND the forecast.
+    this._omCurrent = null;
+    this._omHourly = [];
+    this._omDaily = [];
+    this._omLastLat = null;
+    this._omLastLon = null;
+    this._omLastFetch = 0;
+    this._omFetching = false;
+
+    // If hass is already available (e.g. config edited on an existing card),
+    // kick off a fetch immediately instead of waiting for the next hass tick.
+    if (this._hass && this._locationMode()) {
+      const loc = this._resolveLocation();
+      if (loc) this._fetchOpenMeteoWeather(loc.lat, loc.lon);
+    }
   }
 
   set hass(value) {
     this._hass = value;
     if (!this._subscribed && value) {
       this._subscribed = true;
-      this._subscribeForecasts();
+      if (this._config?.entity) this._subscribeForecasts();
+    }
+    if (value && this._config && this._locationMode()) {
+      const loc = this._resolveLocation();
+      if (loc) {
+        const coordsChanged =
+          loc.lat !== this._omLastLat || loc.lon !== this._omLastLon;
+        const stale = Date.now() - this._omLastFetch > 600_000;
+        if (coordsChanged || stale) {
+          this._fetchOpenMeteoWeather(loc.lat, loc.lon);
+        }
+      }
     }
     this.requestUpdate();
   }
 
   get hass() {
     return this._hass;
+  }
+
+  updated() {
+    if (this._config?.disable_animations) {
+      this.setAttribute("disable-animations", "");
+    } else {
+      this.removeAttribute("disable-animations");
+    }
   }
 
   disconnectedCallback() {
@@ -128,13 +181,17 @@ class YetAnotherWeatherCard extends LitElement {
     super.connectedCallback();
     if (this._hass && !this._subscribed) {
       this._subscribed = true;
-      this._subscribeForecasts();
+      if (this._config?.entity) this._subscribeForecasts();
+    }
+    if (this._hass && this._config && this._locationMode()) {
+      const loc = this._resolveLocation();
+      if (loc) this._fetchOpenMeteoWeather(loc.lat, loc.lon);
     }
   }
 
   // ── Forecast subscriptions (modern HA WebSocket API) ─────
   async _subscribeForecasts() {
-    if (!this._hass || !this._config) return;
+    if (!this._hass || !this._config || !this._config.entity) return;
     this._unsubscribeForecasts();
 
     const tryType = async (type) => {
@@ -169,6 +226,119 @@ class YetAnotherWeatherCard extends LitElement {
     if (this._unsubDaily) {
       try { this._unsubDaily(); } catch (e) {}
       this._unsubDaily = null;
+    }
+  }
+
+  // ── Location-based mode helpers ──────────────────────────
+
+  _locationMode() {
+    return !this._config?.entity && !!(
+      this._config?.location_entity ||
+      (this._config?.latitude != null && this._config?.longitude != null)
+    );
+  }
+
+  _resolveLocation() {
+    if (!this._hass || !this._config) return null;
+    const le = this._config.location_entity;
+    if (le) {
+      const s = this._hass.states[le];
+      if (s?.attributes.latitude != null && s?.attributes.longitude != null) {
+        return { lat: s.attributes.latitude, lon: s.attributes.longitude };
+      }
+    }
+    if (this._config.latitude != null && this._config.longitude != null) {
+      const lat = parseFloat(this._config.latitude);
+      const lon = parseFloat(this._config.longitude);
+      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+    }
+    return null;
+  }
+
+  _wmoToCondition(code) {
+    const map = {
+      0: "sunny", 1: "sunny", 2: "partlycloudy", 3: "cloudy",
+      45: "fog", 48: "fog",
+      51: "rainy", 53: "rainy", 55: "pouring",
+      56: "snowy-rainy", 57: "snowy-rainy",
+      61: "rainy", 63: "rainy", 65: "pouring",
+      66: "snowy-rainy", 67: "snowy-rainy",
+      71: "snowy", 73: "snowy", 75: "snowy", 77: "snowy",
+      80: "rainy", 81: "rainy", 82: "pouring",
+      85: "snowy", 86: "snowy",
+      95: "lightning-rainy",
+      96: "lightning-rainy", 99: "lightning-rainy",
+    };
+    return map[code] ?? "cloudy";
+  }
+
+  async _fetchOpenMeteoWeather(lat, lon) {
+    if (this._omFetching) return;
+    this._omFetching = true;
+    const useFahrenheit =
+      this._hass?.config?.unit_system?.temperature === "°F";
+    const tempUnit = useFahrenheit ? "fahrenheit" : "celsius";
+    const url =
+      `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,surface_pressure` +
+      `&hourly=temperature_2m,weather_code,precipitation_probability` +
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+      `&wind_speed_unit=kmh&temperature_unit=${tempUnit}&timezone=auto&forecast_days=7&forecast_hours=24`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      // Build all three payloads before touching any reactive property so
+      // they all land in the same Lit render cycle (no partial-update races).
+      const c = data.current;
+      const newCurrent = {
+        condition: this._wmoToCondition(c.weather_code),
+        temperature: c.temperature_2m,
+        humidity: c.relative_humidity_2m,
+        wind_speed: c.wind_speed_10m,
+        pressure: c.surface_pressure,
+        temperature_unit: useFahrenheit ? "°F" : "°C",
+        wind_speed_unit: "km/h",
+        pressure_unit: "hPa",
+      };
+      // Build a date→min map from the daily data so hourly items can be
+      // annotated with the day's forecasted low.  This restores the filled
+      // temperature band on the graph for hourly mode (the strip is
+      // unaffected — it only shows fc-lo when _mode === "daily").
+      const d = data.daily;
+      const dailyMinByDate = {};
+      d.time.forEach((dt, i) => { dailyMinByDate[dt] = d.temperature_2m_min[i]; });
+
+      const h = data.hourly;
+      const newHourly = h.time.map((dt, i) => {
+        const day = dt.split("T")[0]; // "2024-01-15T14:00" → "2024-01-15"
+        return {
+          datetime: dt,
+          condition: this._wmoToCondition(h.weather_code[i]),
+          temperature: h.temperature_2m[i],
+          templow: dailyMinByDate[day] ?? null,
+          precipitation_probability: h.precipitation_probability[i],
+        };
+      });
+      const newDaily = d.time.map((dt, i) => ({
+        datetime: dt,
+        condition: this._wmoToCondition(d.weather_code[i]),
+        temperature: d.temperature_2m_max[i],
+        templow: d.temperature_2m_min[i],
+        precipitation_probability: d.precipitation_probability_max[i],
+      }));
+      // Assign all at once — Lit batches these into a single render
+      this._omCurrent = newCurrent;
+      this._omHourly = newHourly;
+      this._omDaily = newDaily;
+      this._omLastLat = lat;
+      this._omLastLon = lon;
+      this._omLastFetch = Date.now();
+    } catch (e) {
+      // Network error — keep displaying previous data
+    } finally {
+      this._omFetching = false;
     }
   }
 
@@ -289,6 +459,31 @@ class YetAnotherWeatherCard extends LitElement {
         wind: "Wind",
         not_found: "Wetter-Entität nicht gefunden",
       },
+      fr: {
+        "clear-night": "Nuit dégagée",
+        cloudy: "Couvert",
+        exceptional: "Exceptionnel",
+        fog: "Brouillard",
+        hail: "Grêle",
+        lightning: "Orageux",
+        "lightning-rainy": "Pluie orageuse",
+        partlycloudy: "Partiellement couvert",
+        pouring: "Forte pluie",
+        rainy: "Pluvieux",
+        snowy: "Neige",
+        "snowy-rainy": "Pluie-neige mêlées",
+        sunny: "Ensoleillé",
+        windy: "Vent",
+        "windy-variant": "Venteux",
+        hourly: "Heures",
+        daily: "Jours",
+        now: "Actuellement",
+        today: "Aujourd'hui",
+        humidity: "Humidité",
+        pressure: "Pression",
+        wind: "Vent",
+        not_found: "Entité météo introuvable",
+      },
       hu: {
         "clear-night": "Tiszta éjszaka",
         cloudy: "Felhős",
@@ -318,7 +513,7 @@ class YetAnotherWeatherCard extends LitElement {
   }
 
   _lang() {
-    const supported = ["en", "de", "hu"];
+    const supported = ["en", "de", "fr", "hu"];
     // Explicit config option wins
     if (this._config?.language && supported.includes(this._config.language)) {
       return this._config.language;
@@ -637,39 +832,90 @@ class YetAnotherWeatherCard extends LitElement {
   // ── Render ───────────────────────────────────────────────
   render() {
     if (!this._hass || !this._config) return html``;
-    const w = this._hass.states[this._config.entity];
-    if (!w) {
-      return html`<ha-card>
-        <div class="error">Weather entity '${this._config.entity}' not found</div>
-      </ha-card>`;
+
+    // ── Normalise data per mode so the template below works for both ──
+    let condition, friendly, tempData, humidityData, pressureData, windSpeed, windUnit, fcHourly, fcDaily;
+
+    if (this._locationMode()) {
+      // Location-based mode: data comes from Open-Meteo
+      const loc = this._resolveLocation();
+      if (!loc) {
+        return html`<ha-card>
+          <div class="error">
+            Location entity not found or has no coordinates
+          </div>
+        </ha-card>`;
+      }
+      if (!this._omCurrent) {
+        return html`<ha-card>
+          <div class="loading">Loading weather data…</div>
+        </ha-card>`;
+      }
+      const om = this._omCurrent;
+      condition = om.condition;
+      friendly =
+        this._config.name ||
+        (this._config.location_entity
+          ? this._hass.states[this._config.location_entity]?.attributes
+              .friendly_name
+          : null) ||
+        "Weather";
+      // Custom sensors can still override Open-Meteo values
+      tempData =
+        this._resolveValue(this._config.temperature_entity, null, "°C") ||
+        { value: om.temperature, unit: om.temperature_unit };
+      humidityData =
+        this._resolveValue(this._config.humidity_entity, null, "%") ||
+        { value: om.humidity, unit: "%" };
+      pressureData =
+        this._resolveValue(this._config.pressure_entity, null, "hPa") ||
+        { value: om.pressure, unit: om.pressure_unit };
+      windSpeed = om.wind_speed;
+      windUnit = om.wind_speed_unit;
+      fcHourly = this._omHourly;
+      fcDaily = this._omDaily;
+    } else {
+      // Entity-based mode (existing behaviour)
+      const w = this._hass.states[this._config.entity];
+      if (!w) {
+        return html`<ha-card>
+          <div class="error">Weather entity '${this._config.entity}' not found</div>
+        </ha-card>`;
+      }
+      condition = w.state;
+      friendly =
+        this._config.name || w.attributes.friendly_name || this._config.entity;
+      tempData = this._resolveValue(
+        this._config.temperature_entity,
+        "temperature",
+        "°C"
+      );
+      humidityData = this._resolveValue(
+        this._config.humidity_entity,
+        "humidity",
+        "%"
+      );
+      pressureData = this._resolveValue(
+        this._config.pressure_entity,
+        "pressure",
+        "hPa"
+      );
+      windSpeed = w.attributes.wind_speed;
+      windUnit = w.attributes.wind_speed_unit || "km/h";
+      fcHourly = this._forecastHourly;
+      fcDaily = this._forecastDaily;
     }
 
-    const condition = w.state;
-    const friendly =
-      this._config.name || w.attributes.friendly_name || this._config.entity;
-
-    const tempData = this._resolveValue(
-      this._config.temperature_entity,
-      "temperature",
-      "°C"
-    );
-    const tempUnit = tempData?.unit || w.attributes.temperature_unit || "°C";
-    const humidityData = this._resolveValue(
-      this._config.humidity_entity,
-      "humidity",
-      "%"
-    );
-    const pressureData = this._resolveValue(
-      this._config.pressure_entity,
-      "pressure",
-      "hPa"
-    );
-
-    const fc =
-      this._mode === "hourly" ? this._forecastHourly : this._forecastDaily;
+    const tempUnit =
+      tempData?.unit ||
+      (this._config.entity
+        ? this._hass.states[this._config.entity]?.attributes.temperature_unit
+        : null) ||
+      "°C";
+    const fc = this._mode === "hourly" ? fcHourly : fcDaily;
     const fcItems = (fc || []).slice(0, this._config.forecast_items);
-    const hasHourly = this._forecastHourly && this._forecastHourly.length > 0;
-    const hasDaily = this._forecastDaily && this._forecastDaily.length > 0;
+    const hasHourly = fcHourly && fcHourly.length > 0;
+    const hasDaily = fcDaily && fcDaily.length > 0;
 
     return html`
       <ha-card>
@@ -688,7 +934,7 @@ class YetAnotherWeatherCard extends LitElement {
                 </div>`
             : ""}
 
-          ${this._config.show_stats && (humidityData || pressureData || w.attributes.wind_speed != null)
+          ${this._config.show_stats && (humidityData || pressureData || windSpeed != null)
             ? html`
                 <div class="stats">
                   ${humidityData
@@ -703,10 +949,10 @@ class YetAnotherWeatherCard extends LitElement {
                         <div class="stat-val">${this._fmt(pressureData.value, 0)} ${pressureData.unit || "hPa"}</div>
                       </div>`
                     : ""}
-                  ${w.attributes.wind_speed != null
+                  ${windSpeed != null
                     ? html`<div class="stat">
                         <div class="stat-label">${this._t("wind")}</div>
-                        <div class="stat-val">${this._fmt(w.attributes.wind_speed, 0)} ${w.attributes.wind_speed_unit || "km/h"}</div>
+                        <div class="stat-val">${this._fmt(windSpeed, 0)} ${windUnit}</div>
                       </div>`
                     : ""}
                 </div>`
@@ -765,6 +1011,7 @@ class YetAnotherWeatherCard extends LitElement {
       ha-card { overflow: hidden; }
       .card { padding: 20px 22px; }
       .error { padding: 20px; color: var(--error-color, #db4437); }
+      .loading { padding: 20px; color: var(--secondary-text-color); }
 
       .top {
         display: flex;
@@ -895,6 +1142,15 @@ class YetAnotherWeatherCard extends LitElement {
         .sun-rays, .cloud, .cloud2, .raindrop, .snowflake,
         .bolt, .wind, .fog, .hailstone { animation: none; }
       }
+      :host([disable-animations]) .sun-rays,
+      :host([disable-animations]) .cloud,
+      :host([disable-animations]) .cloud2,
+      :host([disable-animations]) .raindrop,
+      :host([disable-animations]) .snowflake,
+      :host([disable-animations]) .bolt,
+      :host([disable-animations]) .wind,
+      :host([disable-animations]) .fog,
+      :host([disable-animations]) .hailstone { animation: none; }
     `;
   }
 
@@ -946,8 +1202,27 @@ class YetAnotherWeatherCardEditor extends LitElement {
     return [
       {
         name: "entity",
-        required: true,
         selector: { entity: { domain: "weather" } },
+      },
+      {
+        name: "location_entity",
+        selector: {
+          entity: { domain: ["device_tracker", "person"] },
+        },
+      },
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          {
+            name: "latitude",
+            selector: { number: { min: -90, max: 90, step: 0.0001, mode: "box" } },
+          },
+          {
+            name: "longitude",
+            selector: { number: { min: -180, max: 180, step: 0.0001, mode: "box" } },
+          },
+        ],
       },
       {
         name: "name",
@@ -984,6 +1259,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
                   { value: "", label: "Auto (Home Assistant)" },
                   { value: "en", label: "English" },
                   { value: "de", label: "Deutsch" },
+                  { value: "fr", label: "Français" },
                   { value: "hu", label: "Magyar" },
                 ],
               },
@@ -1029,6 +1305,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
           { name: "show_current", selector: { boolean: {} } },
           { name: "show_stats", selector: { boolean: {} } },
           { name: "show_forecast", selector: { boolean: {} } },
+          { name: "disable_animations", selector: { boolean: {} } },
         ],
       },
     ];
@@ -1037,7 +1314,10 @@ class YetAnotherWeatherCardEditor extends LitElement {
   // Pretty labels & helper text for ha-form. Falls back to the field name if omitted.
   _computeLabel = (schema) => {
     const labels = {
-      entity: "Weather entity (required)",
+      entity: "Weather entity",
+      location_entity: "Location entity (device tracker / person)",
+      latitude: "Latitude",
+      longitude: "Longitude",
       name: "Display name",
       default_mode: "Default forecast view",
       forecast_items: "Forecast items",
@@ -1049,12 +1329,18 @@ class YetAnotherWeatherCardEditor extends LitElement {
       show_current: "Show current",
       show_stats: "Show stats",
       show_forecast: "Show forecast",
+      disable_animations: "Disable animations",
     };
     return labels[schema.name] ?? schema.name;
   };
 
   _computeHelper = (schema) => {
     const helpers = {
+      entity: "Required unless location entities are configured. Weather data source for entity mode.",
+      location_entity: "Uses this entity's latitude/longitude to fetch weather from Open-Meteo. Replaces the weather entity as data source.",
+      latitude: "Fixed latitude coordinate (used together with longitude)",
+      longitude: "Fixed longitude coordinate (used together with latitude)",
+      disable_animations: "Show icons without motion (respects prefers-reduced-motion too)",
       temperature_entity: "Overrides the weather entity's temperature",
       humidity_entity: "Overrides the weather entity's humidity",
       pressure_entity: "Overrides the weather entity's pressure",
@@ -1076,6 +1362,9 @@ class YetAnotherWeatherCardEditor extends LitElement {
       "humidity_entity",
       "pressure_entity",
       "language",
+      "location_entity",
+      "latitude",
+      "longitude",
     ]) {
       if (newConfig[key] === "" || newConfig[key] == null) {
         delete newConfig[key];
@@ -1102,6 +1391,7 @@ class YetAnotherWeatherCardEditor extends LitElement {
       show_current: true,
       show_stats: true,
       show_forecast: true,
+      disable_animations: false,
       ...this._config,
     };
 
@@ -1145,7 +1435,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c YET-ANOTHER-WEATHER-CARD %c v1.5.0 ",
+  "%c YET-ANOTHER-WEATHER-CARD %c v1.6.0 ",
   "color: white; background: #185FA5; font-weight: 700; padding: 2px 6px; border-radius: 3px 0 0 3px;",
   "color: #185FA5; background: white; font-weight: 700; padding: 2px 6px; border: 1px solid #185FA5; border-radius: 0 3px 3px 0;"
 );
